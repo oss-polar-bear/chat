@@ -6,10 +6,15 @@ import {
   threadIdContract,
 } from "@chat-adapter/tests";
 import { Chat, Message } from "chat";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resetTwilioContentCacheForTests } from "./api/content";
 import { createTwilioAdapter, type TwilioThreadId } from "./index";
 
 describe("TwilioAdapter", () => {
+  beforeEach(() => {
+    resetTwilioContentCacheForTests();
+  });
+
   it("derives the channel id from a thread's sender", () => {
     // Encode/decode round-trips and pinned encoded strings live in the shared
     // `threadIdContract` at the bottom of this file; channelIdFromThreadId is
@@ -476,6 +481,51 @@ describe("TwilioAdapter", () => {
     const messageCall = fetch.mock.calls[1];
     const body = messageCall?.[1]?.body as URLSearchParams;
     expect(body.get("ContentSid")).toBe("HX123");
+  });
+
+  it("reuses ContentSid cache for identical RCS cards", async () => {
+    let callIndex = 0;
+    const fetch = vi.fn(async () => {
+      callIndex++;
+      if (callIndex === 1) {
+        return Response.json({ sid: "HX123" });
+      }
+      return Response.json({
+        body: null,
+        direction: "outbound-api",
+        from: "MG123",
+        sid: `SM${callIndex}`,
+        to: "+15550000002",
+      });
+    });
+
+    const adapter = createTwilioAdapter({
+      accountSid: "AC123",
+      authToken: "token",
+      fetch,
+      messagingServiceSid: "MG123",
+    });
+
+    const cardMessage = {
+      card: {
+        children: [
+          {
+            children: [{ id: "yes", label: "Yes", type: "button" as const }],
+            type: "actions" as const,
+          },
+        ],
+        title: "Confirm?",
+        type: "card" as const,
+      },
+    };
+
+    await adapter.postMessage("twilio:MG123:%2B15550000002", cardMessage);
+    await adapter.postMessage("twilio:MG123:%2B15550000002", cardMessage);
+
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(String(fetch.mock.calls[0]?.[0])).toContain("content.twilio.com");
+    expect(String(fetch.mock.calls[1]?.[0])).toContain("Messages.json");
+    expect(String(fetch.mock.calls[2]?.[0])).toContain("Messages.json");
   });
 
   it("falls back to text when Content API fails", async () => {
