@@ -73,8 +73,7 @@ export const fetchMessages = (
     inputSchema: FETCH_MESSAGES_INPUT,
     execute: async ({ threadId, limit, cursor, direction }) => {
       guard?.(threadId);
-      const thread = chat.thread(threadId);
-      const result = await thread.adapter.fetchMessages(threadId, {
+      const result = await chat.history.thread.list(threadId, {
         limit,
         cursor,
         direction,
@@ -106,14 +105,7 @@ export const fetchChannelMessages = (
     inputSchema: FETCH_CHANNEL_MESSAGES_INPUT,
     execute: async ({ channelId, limit, cursor, direction }) => {
       guard?.(channelId);
-      const adapterName = channelId.split(":")[0];
-      const adapter = adapterName ? chat.getAdapter(adapterName) : undefined;
-      if (!adapter?.fetchChannelMessages) {
-        throw new Error(
-          `Adapter "${adapterName}" does not support fetching channel messages`
-        );
-      }
-      const result = await adapter.fetchChannelMessages(channelId, {
+      const result = await chat.history.channel.listMessages(channelId, {
         limit,
         cursor,
         direction,
@@ -187,14 +179,10 @@ export const listThreads = (
     inputSchema: LIST_THREADS_INPUT,
     execute: async ({ channelId, limit, cursor }) => {
       guard?.(channelId);
-      const adapterName = channelId.split(":")[0];
-      const adapter = adapterName ? chat.getAdapter(adapterName) : undefined;
-      if (!adapter?.listThreads) {
-        throw new Error(
-          `Adapter "${adapterName}" does not support listing threads`
-        );
-      }
-      const result = await adapter.listThreads(channelId, { limit, cursor });
+      const result = await chat.history.channel.listThreads(channelId, {
+        limit,
+        cursor,
+      });
       return {
         threads: result.threads.map((t: ThreadSummary) => ({
           id: t.id,

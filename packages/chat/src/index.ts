@@ -32,6 +32,9 @@ export {
 } from "./channel";
 export { Chat } from "./chat";
 export { fromFullStream } from "./from-full-stream";
+export { HistoryApiImpl } from "./history";
+export { toPromptEntries } from "./history/to-prompt";
+export type { PromptEntry } from "./history/types";
 export {
   Message,
   type MessageData,
@@ -365,6 +368,7 @@ export type {
   Attachment,
   Author,
   Channel,
+  ChannelHistoryApi,
   ChannelInfo,
   ChannelVisibility,
   ChatConfig,
@@ -385,6 +389,9 @@ export type {
   FetchResult,
   FileUpload,
   FormattedContent,
+  HistoryApi,
+  HistoryConfig,
+  HistoryEntry,
   IdentityContext,
   IdentityResolver,
   LinkPreview,
@@ -444,6 +451,7 @@ export type {
   SubscribedMessageHandler,
   TaskUpdateChunk,
   Thread,
+  ThreadHistoryApi,
   ThreadInfo,
   ThreadSummary,
   TranscriptEntry,
@@ -451,6 +459,9 @@ export type {
   TranscriptsApi,
   TranscriptsConfig,
   TypingOptions,
+  UserHistoryApi,
+  UserHistoryConfig,
+  UserHistoryEntry,
   UserInfo,
   WebhookOptions,
   WellKnownEmoji,
