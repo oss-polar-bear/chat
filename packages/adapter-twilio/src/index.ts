@@ -33,6 +33,7 @@ import {
   cardToTwilioRcs,
   cardToTwilioText,
   decodeTwilioCallbackData,
+  TWILIO_EMPTY_CARD_FALLBACK,
 } from "./cards";
 import {
   isRcsCapableSender,
@@ -211,15 +212,28 @@ export class TwilioAdapter
     if (card && isRcsCapableSender(thread.sender)) {
       const rcsResult = cardToTwilioRcs(card);
       if (rcsResult.type === "content") {
+        // Only template resolution falls back to plain text. Once the send
+        // itself starts, errors propagate: a failed response does not prove
+        // the message was not delivered, and falling back here could send
+        // the recipient a duplicate.
+        let contentSid: string | undefined;
         try {
           const content = await getOrCreateTwilioContent({
             ...this.apiOptions(),
             contentApiUrl: this.contentApiUrl,
             contentBody: rcsResult.contentBody,
           });
+          contentSid = content.sid;
+        } catch (error) {
+          this.logger.warn(
+            "RCS content template resolution failed, falling back to text",
+            { error: String(error) }
+          );
+        }
+        if (contentSid) {
           const raw = await sendTwilioMessage({
             ...this.apiOptions(),
-            contentSid: content.sid,
+            contentSid,
             statusCallbackUrl: this.statusCallbackUrl,
             to: thread.recipient,
             ...senderFields(thread.sender),
@@ -229,10 +243,6 @@ export class TwilioAdapter
             raw,
             threadId: this.threadIdForResource(raw, thread),
           };
-        } catch (error) {
-          this.logger.warn("RCS content send failed, falling back to text", {
-            error: String(error),
-          });
         }
       }
     }
@@ -409,7 +419,10 @@ export class TwilioAdapter
 
   rehydrateAttachment(attachment: Attachment): Attachment {
     const url = attachment.fetchMetadata?.twilioMediaUrl ?? attachment.url;
-    if (!url) {
+    // Only Twilio media URLs get an authenticated fetcher. Location shares
+    // (geo: URLs) and other non-HTTP attachments pass through untouched so
+    // their coordinates in fetchMetadata survive rehydration.
+    if (!(url && HTTP_URL_PATTERN.test(url))) {
       return attachment;
     }
     return this.twilioAttachment({
@@ -495,8 +508,10 @@ export class TwilioAdapter
 
   protected renderPostableText(message: AdapterPostableMessage): string {
     const card = extractCard(message);
+    // An actions-only card has no text content of its own; posting it must
+    // still produce a non-empty SMS body rather than a validation error.
     const text = card
-      ? cardToTwilioText(card)
+      ? cardToTwilioText(card) || TWILIO_EMPTY_CARD_FALLBACK
       : this.formatConverter.renderPostable(message);
     return truncateTwilioText(text, { limit: TWILIO_MESSAGE_LIMIT }).text;
   }
@@ -552,10 +567,13 @@ export class TwilioAdapter
   }
 
   protected defaultSender(): string {
+    // phoneNumber-first matches the adapter's pre-RCS behavior so openDM()
+    // keeps producing the same thread ids for existing deployments that
+    // configure both a phone number and a messaging service.
     const sender =
+      this.phoneNumber ??
       this.messagingServiceSid ??
-      (this.rcsSenderId ? normalizeRcsSenderId(this.rcsSenderId) : undefined) ??
-      this.phoneNumber;
+      (this.rcsSenderId ? normalizeRcsSenderId(this.rcsSenderId) : undefined);
     if (!sender) {
       throw new ValidationError(
         "twilio",
@@ -602,6 +620,8 @@ export function createTwilioAdapter(
 ): TwilioAdapter {
   return new TwilioAdapter(config);
 }
+
+const HTTP_URL_PATTERN = /^https?:\/\//;
 
 function isTwilioWebhookPayload(
   raw: TwilioRawMessage

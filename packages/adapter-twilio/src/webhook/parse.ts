@@ -1,3 +1,4 @@
+import { isTwilioChatCallback } from "../callback";
 import { parseChannelMetadata } from "../channel";
 import type { TwilioMediaPayload, TwilioWebhookPayload } from "./types";
 
@@ -29,8 +30,17 @@ export function parseTwilioWebhookBody(
     };
   }
 
+  // WhatsApp quick-reply taps deliver ButtonPayload alongside Body (the
+  // visible button text). Only taps of buttons this SDK rendered (payloads
+  // with the chat: prefix) become actions; foreign button taps that carry a
+  // Body keep flowing to message handlers like they did before RCS support.
   const buttonPayload = value(params, "ButtonPayload");
-  if (from && to && buttonPayload) {
+  if (
+    from &&
+    to &&
+    buttonPayload &&
+    (isTwilioChatCallback(buttonPayload) || body === undefined)
+  ) {
     return {
       accountSid: value(params, "AccountSid"),
       buttonPayload,

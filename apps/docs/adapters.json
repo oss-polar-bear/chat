@@ -94,7 +94,7 @@
     "slug": "twilio",
     "type": "platform",
     "icon": "twilio",
-    "description": "Build SMS and MMS bots with Twilio Messaging webhooks and the Messages API.",
+    "description": "Build SMS, MMS, and RCS bots with Twilio Messaging webhooks and the Messages API.",
     "packageName": "@chat-adapter/twilio",
     "beta": true,
     "readme": "https://github.com/vercel/chat/tree/main/packages/adapter-twilio"

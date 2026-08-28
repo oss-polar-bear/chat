@@ -5,6 +5,8 @@ import { encodeBase64Utf8, resolveTwilioCredential } from "./index";
 
 const DEFAULT_CONTENT_API_URL = "https://content.twilio.com";
 const CONTENT_LIST_PAGE_SIZE = 50;
+const CONTENT_LOOKUP_MAX_PAGES = 20;
+const CONTENT_SID_CACHE_LIMIT = 200;
 const TWILIO_CONTENT_TYPE_PREFIX = /^twilio\//;
 
 export interface TwilioContentResource {
@@ -37,6 +39,37 @@ export function resetTwilioContentCacheForTests(): void {
   contentSidCache.clear();
 }
 
+// ContentSids are account resources, so the cache key includes the account
+// and API base URL — a process hosting adapters for several Twilio accounts
+// must never reuse one tenant's ContentSid for another.
+function scopedContentCacheKey(
+  accountSid: string,
+  baseUrl: string,
+  contentBody: TwilioContentBody
+): string {
+  return `${accountSid}:${baseUrl}:${twilioContentCacheKey(contentBody)}`;
+}
+
+function cacheContentSid(key: string, sid: string): void {
+  contentSidCache.delete(key);
+  contentSidCache.set(key, sid);
+  if (contentSidCache.size > CONTENT_SID_CACHE_LIMIT) {
+    const oldest = contentSidCache.keys().next().value;
+    if (oldest !== undefined) {
+      contentSidCache.delete(oldest);
+    }
+  }
+}
+
+function contentBaseUrl(options: CreateTwilioContentOptions): string {
+  return (
+    options.contentApiUrl ??
+    options.apiUrl ??
+    options.apiBaseUrl ??
+    DEFAULT_CONTENT_API_URL
+  );
+}
+
 export function twilioContentCacheKey(contentBody: TwilioContentBody): string {
   const { language, types, variables } = contentBody;
   return createHash("sha256")
@@ -64,7 +97,15 @@ export function twilioContentFriendlyName(
 export async function getOrCreateTwilioContent(
   options: CreateTwilioContentOptions
 ): Promise<TwilioContentResource> {
-  const cacheKey = twilioContentCacheKey(options.contentBody);
+  const accountSid = await resolveTwilioCredential(
+    options.credentials?.accountSid,
+    "TWILIO_ACCOUNT_SID"
+  );
+  const cacheKey = scopedContentCacheKey(
+    accountSid,
+    contentBaseUrl(options),
+    options.contentBody
+  );
   const cachedSid = contentSidCache.get(cacheKey);
   if (cachedSid) {
     return {
@@ -74,6 +115,16 @@ export async function getOrCreateTwilioContent(
   }
 
   const friendlyName = twilioContentFriendlyName(options.contentBody);
+
+  // The in-memory cache is empty on every cold start and the Content API
+  // does not deduplicate creates, so look for a template minted by an
+  // earlier process before creating another immortal chat_sdk_* copy.
+  const existing = await findTwilioContentByFriendlyName(options, friendlyName);
+  if (existing?.sid) {
+    cacheContentSid(cacheKey, existing.sid);
+    return existing;
+  }
+
   const contentBody: TwilioContentBody = {
     ...options.contentBody,
     friendly_name: friendlyName,
@@ -84,23 +135,23 @@ export async function getOrCreateTwilioContent(
       ...options,
       contentBody,
     });
-    contentSidCache.set(cacheKey, created.sid);
+    cacheContentSid(cacheKey, created.sid);
     return created;
   } catch (error) {
     if (!isDuplicateFriendlyNameError(error)) {
       throw error;
     }
 
-    const existing = await findTwilioContentByFriendlyName(
+    const recovered = await findTwilioContentByFriendlyName(
       options,
       friendlyName
     );
-    if (!existing?.sid) {
+    if (!recovered?.sid) {
       throw error;
     }
 
-    contentSidCache.set(cacheKey, existing.sid);
-    return existing;
+    cacheContentSid(cacheKey, recovered.sid);
+    return recovered;
   }
 }
 
@@ -116,8 +167,7 @@ export async function createTwilioContent(
     "TWILIO_AUTH_TOKEN"
   );
 
-  const baseUrl = options.contentApiUrl ?? DEFAULT_CONTENT_API_URL;
-  const url = new URL("/v1/Content", baseUrl);
+  const url = new URL("/v1/Content", contentBaseUrl(options));
 
   const request = options.fetch ?? fetch;
   const response = await request(url, {
@@ -190,14 +240,20 @@ async function findTwilioContentByFriendlyName(
     "TWILIO_AUTH_TOKEN"
   );
 
-  const baseUrl = options.contentApiUrl ?? DEFAULT_CONTENT_API_URL;
-  let nextUrl: URL | string | null = new URL("/v1/Content", baseUrl);
+  let nextUrl: URL | string | null = new URL(
+    "/v1/Content",
+    contentBaseUrl(options)
+  );
   nextUrl.searchParams.set("PageSize", String(CONTENT_LIST_PAGE_SIZE));
 
   const request = options.fetch ?? fetch;
   const authorization = `Basic ${encodeBase64Utf8(`${accountSid}:${authToken}`)}`;
 
-  while (nextUrl) {
+  // The Content API cannot filter by FriendlyName, so cap how much of the
+  // library one send is allowed to page through.
+  let pages = 0;
+  while (nextUrl && pages < CONTENT_LOOKUP_MAX_PAGES) {
+    pages += 1;
     const response = await request(nextUrl, {
       headers: { authorization },
       method: "GET",

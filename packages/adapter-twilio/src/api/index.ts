@@ -371,7 +371,13 @@ export function encodeBase64Utf8(value: string): string {
     return Buffer.from(value, "utf8").toString("base64");
   }
   if (typeof globalThis.btoa === "function") {
-    return globalThis.btoa(value);
+    // btoa rejects code points above U+00FF, so encode to UTF-8 bytes first.
+    const bytes = new TextEncoder().encode(value);
+    let binary = "";
+    for (const byte of bytes) {
+      binary += String.fromCharCode(byte);
+    }
+    return globalThis.btoa(binary);
   }
   throw new Error("Base64 encoding is not supported in this runtime");
 }

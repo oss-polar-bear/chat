@@ -134,6 +134,65 @@ describe("cardToTwilioRcs", () => {
     }
   });
 
+  it("keeps reply buttons when a card mixes in link buttons", () => {
+    const card = {
+      children: [
+        {
+          children: [
+            { id: "approve", label: "Approve", type: "button" as const },
+            { id: "reject", label: "Reject", type: "button" as const },
+            {
+              label: "View diff",
+              type: "link-button" as const,
+              url: "https://example.com/diff",
+            },
+          ],
+          type: "actions" as const,
+        },
+      ],
+      title: "Deploy v1.2.3",
+      type: "card" as const,
+    };
+
+    const result = cardToTwilioRcs(card);
+    expect(result.type).toBe("content");
+    if (result.type === "content") {
+      const cardType = result.contentBody.types["twilio/card"] as {
+        actions: Array<{ title: string; type: string; url?: string }>;
+      };
+      expect(cardType.actions.map((a) => a.type)).toEqual([
+        "quick_reply",
+        "quick_reply",
+        "URL",
+      ]);
+      expect(cardType.actions[2].url).toBe("https://example.com/diff");
+    }
+  });
+
+  it("keeps overflow links in the body for call-to-action content", () => {
+    const links = Array.from({ length: 3 }, (_, i) => ({
+      label: `Link ${i}`,
+      type: "link-button" as const,
+      url: `https://example.com/${i}`,
+    }));
+    const card = {
+      children: [{ children: links, type: "actions" as const }],
+      title: "Links",
+      type: "card" as const,
+    };
+
+    const result = cardToTwilioRcs(card);
+    expect(result.type).toBe("content");
+    if (result.type === "content") {
+      const cta = result.contentBody.types["twilio/call-to-action"] as {
+        actions: unknown[];
+        body: string;
+      };
+      expect(cta.actions).toHaveLength(2);
+      expect(cta.body).toContain("Link 2: https://example.com/2");
+    }
+  });
+
   it("falls back to text for cards without actions", () => {
     const card = {
       children: [{ content: "Just text", type: "text" as const }],

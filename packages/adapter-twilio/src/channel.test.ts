@@ -22,13 +22,34 @@ describe("parseChannelMetadata", () => {
 });
 
 describe("resolveInboundThreadSender", () => {
-  it("prefers MessagingServiceSid from the webhook", () => {
+  it("keeps the phone sender for plain SMS routed through a messaging service", () => {
+    // Twilio sends MessagingServiceSid on every inbound webhook for numbers
+    // in a Messaging Service; SMS threads must stay keyed by phone number.
     expect(
       resolveInboundThreadSender({
         messagingServiceSid: "MG123",
         to: "+15550000001",
       })
+    ).toBe("+15550000001");
+  });
+
+  it("uses the webhook MessagingServiceSid for inbound RCS metadata", () => {
+    expect(
+      resolveInboundThreadSender({
+        channelMetadata: { type: "rcs" },
+        messagingServiceSid: "MG123",
+        to: "+15550000001",
+      })
     ).toBe("MG123");
+  });
+
+  it("keeps rcs: addresses as the thread sender", () => {
+    expect(
+      resolveInboundThreadSender({
+        messagingServiceSid: "MG123",
+        to: "rcs:brand_agent",
+      })
+    ).toBe("rcs:brand_agent");
   });
 
   it("uses configured messaging service for inbound RCS metadata", () => {

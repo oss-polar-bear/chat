@@ -129,7 +129,7 @@ https://your-domain.com/api/webhooks/twilio
     contentApiUrl: {
       type: "string",
       description:
-        "Override the Twilio Content API base URL (testing only).",
+        "Override the Twilio Content API base URL. Defaults to `apiUrl` when that is set, otherwise `https://content.twilio.com`.",
     },
     webhookUrl: {
       type: "string | ((request: Request) => string | Promise<string>)",
@@ -189,7 +189,11 @@ When an RCS-capable sender is detected (`MG…` Messaging Service or `rcs:` addr
 
 - Sends cards as Twilio Content API templates (rich cards with buttons) over RCS
 - Includes an SMS text fallback in every template so non-RCS recipients get a usable message
-- Routes inbound button taps (`ButtonPayload`) to `onAction` handlers
+- Routes inbound taps of buttons rendered by Chat SDK to `onAction` handlers
+
+Inbound RCS messages are keyed to the Messaging Service (or configured RCS sender), so replies go back out over RCS. Plain SMS threads keep their phone-number thread ids even when the number belongs to a Messaging Service, and `openDM` prefers `phoneNumber` over `messagingServiceSid` and `rcsSenderId`, so enabling RCS does not change the thread ids of existing conversations.
+
+Button taps from templates that Chat SDK did not send (for example Studio flows or pre-created WhatsApp templates) are not turned into actions: when they carry a message body they arrive as regular messages, matching the adapter's behavior before RCS support.
 
 ### Handling button taps
 
@@ -204,7 +208,7 @@ bot.onAction(async (action) => {
 ### Sending rich cards
 
 ```typescript title="send-card.ts" lineNumbers
-import { Card, Button, CardText } from "chat";
+import { Actions, Button, Card, CardText } from "chat";
 
 await thread.post({
   card: Card({
@@ -304,7 +308,7 @@ For live calls, `updateTwilioCall()` in `@chat-adapter/twilio/api` can post repl
 - Cards render as rich RCS content when the sender is a Messaging Service (`MG…`) or RCS address; otherwise they fall back to plain text.
 - RCS read receipts (`EventType=READ`) are parsed and logged but not surfaced to Chat SDK handlers (no delivery API exists today).
 - `fetchMessages` uses the Messages API and is best for phone-number based threads. Messaging Service history can be less precise because inbound webhooks identify the receiving phone number, not only the Messaging Service SID.
-- Content template creation adds one extra API call per card send. This is acceptable for bot replies; high-volume use cases should consider pre-creating templates.
+- Content templates are created on demand and reused by a stable name derived from the card's content, so identical cards share one template across restarts. Cards that embed changing values (timestamps, order ids, user names) produce a new template per unique body, and Twilio keeps Content resources until you delete them. Keep card bodies stable, or pre-create templates, for high-volume use.
 
 ## Feature support
 

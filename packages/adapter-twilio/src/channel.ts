@@ -82,18 +82,22 @@ export function resolveInboundThreadSender(options: {
   rcsSenderIdConfig?: string;
   to: string;
 }): string {
-  if (options.messagingServiceSid?.startsWith("MG")) {
-    return options.messagingServiceSid;
-  }
   if (isRcsCapableSender(options.to)) {
     return options.to;
   }
+  // Twilio includes MessagingServiceSid on every inbound webhook for numbers
+  // in a Messaging Service, RCS or not. Only RCS traffic is rekeyed to a
+  // sender that can reply over RCS — plain SMS threads stay keyed by phone
+  // number so existing subscriptions and thread state survive upgrades.
   if (
     inferTwilioChannel({
       channelMetadata: options.channelMetadata,
       to: options.to,
     }) === "rcs"
   ) {
+    if (options.messagingServiceSid?.startsWith("MG")) {
+      return options.messagingServiceSid;
+    }
     if (options.messagingServiceSidConfig) {
       return options.messagingServiceSidConfig;
     }

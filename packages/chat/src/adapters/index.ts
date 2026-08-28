@@ -1028,9 +1028,15 @@ export const ADAPTERS = {
   },
   twilio: {
     description:
-      "Build SMS and MMS bots with Twilio Messaging webhooks and the Messages API.",
+      "Build SMS, MMS, and RCS bots with Twilio Messaging webhooks and the Messages API.",
     env: {
-      config: ["webhookUrl", "webhookVerifier", "statusCallbackUrl", "apiUrl"],
+      config: [
+        "webhookUrl",
+        "webhookVerifier",
+        "statusCallbackUrl",
+        "apiUrl",
+        "contentApiUrl",
+      ],
       credentialModes: [
         {
           label: "Account credentials",
@@ -1045,6 +1051,10 @@ export const ADAPTERS = {
         env(
           "TWILIO_MESSAGING_SERVICE_SID",
           "Default Messaging Service SID for openDM."
+        ),
+        env(
+          "TWILIO_RCS_SENDER_ID",
+          "Direct RCS sender address for openDM when targeting RCS."
         ),
       ],
     },

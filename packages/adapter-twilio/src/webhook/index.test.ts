@@ -184,6 +184,45 @@ describe("Twilio webhook parsing", () => {
     });
   });
 
+  it("keeps foreign button taps with a Body as text messages", () => {
+    // WhatsApp quick-reply taps send ButtonPayload alongside Body. Buttons
+    // not rendered by this SDK (no chat: prefix) must keep reaching message
+    // handlers the way they did before RCS support.
+    const payload = parseTwilioWebhookBody(
+      new URLSearchParams({
+        Body: "Yes",
+        ButtonPayload: "studio_flow_yes",
+        ButtonText: "Yes",
+        From: "whatsapp:+15550000002",
+        MessageSid: "SM790",
+        To: "whatsapp:+15550000001",
+      })
+    );
+
+    expect(payload).toMatchObject({
+      body: "Yes",
+      kind: "text",
+    });
+  });
+
+  it("parses chat-sdk button taps as actions even when Body is present", () => {
+    const payload = parseTwilioWebhookBody(
+      new URLSearchParams({
+        Body: "Approve",
+        ButtonPayload: 'chat:{"a":"approve"}',
+        ButtonText: "Approve",
+        From: "whatsapp:+15550000002",
+        MessageSid: "SM791",
+        To: "whatsapp:+15550000001",
+      })
+    );
+
+    expect(payload).toMatchObject({
+      buttonPayload: 'chat:{"a":"approve"}',
+      kind: "action",
+    });
+  });
+
   it("parses location share with latitude and longitude", () => {
     const payload = parseTwilioWebhookBody(
       new URLSearchParams({

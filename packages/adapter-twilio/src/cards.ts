@@ -6,17 +6,14 @@ import type {
   CardElement,
   LinkButtonElement,
 } from "chat";
-
-const CALLBACK_DATA_PREFIX = "chat:";
-
-interface TwilioCardActionPayload {
-  a: string;
-  v?: string;
-}
+import { encodeTwilioCallbackData } from "./callback";
 
 const MAX_QUICK_REPLY_BUTTONS = 11;
 const MAX_BUTTON_TITLE_LENGTH = 25;
+const MAX_CARD_TITLE_LENGTH = 200;
 const MAX_CTA_BUTTONS = 2;
+
+export const TWILIO_EMPTY_CARD_FALLBACK = "Message from bot";
 
 export type TwilioRcsContentResult =
   | { contentBody: TwilioContentBody; type: "content" }
@@ -29,46 +26,10 @@ export interface TwilioContentBody {
   variables?: Record<string, string>;
 }
 
-export function encodeTwilioCallbackData(
-  actionId: string,
-  value?: string
-): string {
-  const payload: TwilioCardActionPayload = { a: actionId };
-  if (typeof value === "string") {
-    payload.v = value;
-  }
-  return `${CALLBACK_DATA_PREFIX}${JSON.stringify(payload)}`;
-}
-
-export function decodeTwilioCallbackData(data?: string): {
-  actionId: string;
-  value: string | undefined;
-} {
-  if (!data) {
-    return { actionId: "twilio_callback", value: undefined };
-  }
-
-  if (!data.startsWith(CALLBACK_DATA_PREFIX)) {
-    return { actionId: data, value: data };
-  }
-
-  try {
-    const decoded = JSON.parse(
-      data.slice(CALLBACK_DATA_PREFIX.length)
-    ) as TwilioCardActionPayload;
-
-    if (typeof decoded.a === "string" && decoded.a) {
-      return {
-        actionId: decoded.a,
-        value: typeof decoded.v === "string" ? decoded.v : undefined,
-      };
-    }
-  } catch {
-    // Malformed JSON — fall back to passthrough.
-  }
-
-  return { actionId: data, value: data };
-}
+export {
+  decodeTwilioCallbackData,
+  encodeTwilioCallbackData,
+} from "./callback";
 
 export function cardToTwilioText(card: CardElement): string {
   return sharedCardToFallbackText(card).replace(/\*/g, "");
@@ -80,17 +41,20 @@ export function cardToTwilioRcs(card: CardElement): TwilioRcsContentResult {
     return { text: cardToTwilioText(card), type: "text" };
   }
 
-  const linkButtons = extractLinkButtons(actions);
-  if (linkButtons.length > 0 && linkButtons.length <= MAX_CTA_BUTTONS) {
-    return buildCtaContent(card, linkButtons);
-  }
-
   const replyButtons = extractReplyButtons(actions);
+  const linkButtons = extractLinkButtons(actions);
+
   if (replyButtons.length > 0) {
-    if (card.imageUrl || card.title) {
-      return buildCardContent(card, replyButtons);
+    // twilio/quick-reply carries only quick replies, so cards that mix in
+    // link buttons render as twilio/card, which supports URL actions too.
+    if (card.imageUrl || card.title || linkButtons.length > 0) {
+      return buildCardContent(card, replyButtons, linkButtons);
     }
     return buildQuickReplyContent(card, replyButtons);
+  }
+
+  if (linkButtons.length > 0) {
+    return buildCtaContent(card, linkButtons);
   }
 
   return { text: cardToTwilioText(card), type: "text" };
@@ -126,16 +90,24 @@ function buildQuickReplyContent(
 
 function buildCardContent(
   card: CardElement,
-  buttons: ButtonElement[]
+  buttons: ButtonElement[],
+  links: LinkButtonElement[]
 ): TwilioRcsContentResult {
-  const actions = buttons.slice(0, MAX_QUICK_REPLY_BUTTONS).map((btn) => ({
-    id: encodeTwilioCallbackData(btn.id, btn.value),
-    title: truncate(btn.label, MAX_BUTTON_TITLE_LENGTH),
-    type: "quick_reply" as const,
-  }));
+  const actions = [
+    ...buttons.map((btn) => ({
+      id: encodeTwilioCallbackData(btn.id, btn.value),
+      title: truncate(btn.label, MAX_BUTTON_TITLE_LENGTH),
+      type: "quick_reply" as const,
+    })),
+    ...links.map((link) => ({
+      title: truncate(link.label, MAX_BUTTON_TITLE_LENGTH),
+      type: "URL" as const,
+      url: link.url,
+    })),
+  ].slice(0, MAX_QUICK_REPLY_BUTTONS);
 
   const cardType: Record<string, unknown> = {
-    title: truncate(card.title ?? "Menu", 200),
+    title: truncate(card.title ?? "Menu", MAX_CARD_TITLE_LENGTH),
     body: buildBodyText(card) || card.subtitle || " ",
     actions,
   };
@@ -162,8 +134,15 @@ function buildCtaContent(
   card: CardElement,
   links: LinkButtonElement[]
 ): TwilioRcsContentResult {
-  const bodyText = buildBodyText(card) || card.title || "See link";
-  const actions = links.slice(0, MAX_CTA_BUTTONS).map((link) => ({
+  const shown = links.slice(0, MAX_CTA_BUTTONS);
+  const overflow = links.slice(MAX_CTA_BUTTONS);
+  const bodyText = [
+    buildBodyText(card) || card.title || "See link",
+    // Call-to-action templates cap the tappable links, so extra links
+    // survive as plain URLs in the body instead of being dropped.
+    ...overflow.map((link) => `${link.label}: ${link.url}`),
+  ].join("\n");
+  const actions = shown.map((link) => ({
     title: truncate(link.label, MAX_BUTTON_TITLE_LENGTH),
     type: "URL" as const,
     url: link.url,
@@ -187,7 +166,7 @@ function buildCtaContent(
 }
 
 function smsFallbackText(card: CardElement): string {
-  return cardToTwilioText(card) || "Message from bot";
+  return cardToTwilioText(card) || TWILIO_EMPTY_CARD_FALLBACK;
 }
 
 function findActions(children: CardChild[]): ActionsElement | null {
