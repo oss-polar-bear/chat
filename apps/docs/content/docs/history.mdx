@@ -138,13 +138,13 @@ This wipes every entry stored under the key. Single-entry and time-range deletes
 
 ## Thread history
 
-`bot.history.thread` caches messages per thread. It is used internally by adapters that lack server-side message history APIs (Telegram, WhatsApp). You can also use it directly to build conversation context when `fetchMessages` fails or isn't supported.
+`bot.history.thread` caches messages per thread. It is used internally by adapters that lack server-side message history APIs and set `persistThreadHistory: true` (Telegram, WhatsApp). For those adapters, reads are served from the cache; for everything else, the platform response is authoritative.
 
 ```typescript title="lib/bot.ts" lineNumbers
 bot.onSubscribedMessage(async (thread, message) => {
   // bot.history.thread.list() handles both cases — it delegates to
-  // adapter.fetchMessages when available, and falls back to the
-  // SDK-maintained cache for adapters without server-side history.
+  // adapter.fetchMessages, and on adapters that persist history in the
+  // SDK-maintained cache (persistThreadHistory) serves it from there.
   const { messages } = await bot.history.thread.list(thread.id, { limit: 20 });
 
   const reply = await generateReply(messages, message);
@@ -232,6 +232,8 @@ await bot.history.user.delete({ userKey });
 ```
 
 `bot.transcripts` continues to work and will not be removed in the current major version.
+
+You can migrate one field at a time: when both `history.user` and the legacy `transcripts` block are set, they merge, with `history.user` winning field by field. Settings like `retention` and `maxPerUser` left on `transcripts` keep applying until you move them.
 
 ## Storage
 

@@ -32,9 +32,11 @@ export {
 } from "./channel";
 export { Chat } from "./chat";
 export { fromFullStream } from "./from-full-stream";
-export { HistoryApiImpl } from "./history";
-export { toPromptEntries } from "./history/to-prompt";
-export type { PromptEntry } from "./history/types";
+export {
+  HistoryApiImpl,
+  type PromptEntry,
+  toPromptEntries,
+} from "./history";
 export {
   Message,
   type MessageData,

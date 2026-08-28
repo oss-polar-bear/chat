@@ -14,6 +14,7 @@ import {
   emoji,
   Field,
   Fields,
+  type HistoryEntry,
   LinkButton,
   Modal,
   RadioSelect,
@@ -23,7 +24,6 @@ import {
   Table,
   CardText as Text,
   TextInput,
-  type HistoryEntry,
 } from "chat";
 import { type AiMessage, createChatTools, toAiMessages } from "chat/ai";
 import { start } from "workflow/api";

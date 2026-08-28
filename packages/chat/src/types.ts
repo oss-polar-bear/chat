@@ -2846,7 +2846,10 @@ export interface ThreadHistoryApi {
   ): AsyncIterable<Message>;
   /**
    * Fetch a single page of messages from a thread.
-   * Delegates to the adapter's `fetchMessages`.
+   * Delegates to the adapter's `fetchMessages`; adapters that persist
+   * history in the SDK-side store (`persistThreadHistory`) fall back to
+   * that cache when the platform returns nothing.
+   * @throws if the adapter embedded in the thread ID is not registered
    */
   list(threadId: string, options?: FetchOptions): Promise<FetchResult>;
 }
@@ -2858,9 +2861,11 @@ export interface ThreadHistoryApi {
 export interface ChannelHistoryApi {
   /**
    * Fetch top-level messages in a channel (not thread replies).
-   * Delegates to `adapter.fetchChannelMessages` when available, otherwise
-   * `adapter.fetchMessages`.
-   * @throws if the adapter for the channel ID is not registered
+   * Delegates to `adapter.fetchChannelMessages` when available. Adapters
+   * that persist history in the SDK-side store (`persistThreadHistory`)
+   * are served from the channel-keyed cache instead.
+   * @throws if the adapter for the channel ID is not registered, or does
+   * not support fetching channel messages
    */
   listMessages(channelId: string, options?: FetchOptions): Promise<FetchResult>;
   /**

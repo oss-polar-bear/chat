@@ -420,22 +420,23 @@ export class Chat<
       config.history?.thread ?? config.threadHistory ?? config.messageHistory
     );
 
-    // Resolve user-history config: prefer new config.history?.user, then fall back
-    // to legacy config.transcripts. Identity may live on history.user or the
-    // deprecated top-level config.identity field.
-    const userHistoryConfig = config.history?.user ?? config.transcripts;
+    // Resolve user-history config: merge new config.history?.user over legacy
+    // config.transcripts, field by field, so a migration that only moves the
+    // identity resolver does not silently drop retention/maxPerUser settings
+    // still living on the legacy block. Identity may live on history.user or
+    // the deprecated top-level config.identity field.
+    const userHistoryConfig =
+      config.history?.user || config.transcripts
+        ? { ...config.transcripts, ...config.history?.user }
+        : undefined;
     const resolvedIdentity = config.history?.user?.identity ?? config.identity;
 
-    if (userHistoryConfig) {
-      if (!resolvedIdentity) {
-        throw new Error(
-          "ChatConfig requires an identity resolver when user history (or legacy `transcripts`) is configured — set `history.user.identity` or the deprecated top-level `identity` field"
-        );
-      }
-      this._identity = resolvedIdentity;
-    } else {
-      this._identity = resolvedIdentity;
+    if (userHistoryConfig && !resolvedIdentity) {
+      throw new Error(
+        "ChatConfig requires an identity resolver when user history (or legacy `transcripts`) is configured — set `history.user.identity` or the deprecated top-level `identity` field"
+      );
     }
+    this._identity = resolvedIdentity;
 
     this._history = new HistoryApiImpl({
       adapterResolver: (name) => this.adapters.get(name),

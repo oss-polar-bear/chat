@@ -11,9 +11,7 @@ import type { ThreadHistoryCacheLike } from "./thread";
 import { ThreadHistoryApiImpl } from "./thread";
 import { UserHistoryApiImpl } from "./user";
 
-export { ChannelHistoryApiImpl } from "./channel";
 export type { ThreadHistoryCacheLike } from "./thread";
-export { ThreadHistoryApiImpl } from "./thread";
 export { toPromptEntries } from "./to-prompt";
 export type {
   AdapterResolver,
@@ -26,7 +24,6 @@ export type {
   UserHistoryEntry,
   UserHistoryRole,
 } from "./types";
-export { UserHistoryApiImpl } from "./user";
 
 /** @internal */
 interface HistoryApiImplConfig {
@@ -85,7 +82,11 @@ export class HistoryApiImpl implements HistoryApi {
       config.adapterResolver,
       config.cache
     );
-    this.channel = new ChannelHistoryApiImpl(config.adapterResolver);
+    this.channel = new ChannelHistoryApiImpl(
+      config.adapterResolver,
+      this.thread,
+      config.cache
+    );
   }
 
   get user(): UserHistoryApi {

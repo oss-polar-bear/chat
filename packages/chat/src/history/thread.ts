@@ -1,5 +1,6 @@
 import type { Message } from "../message";
 import type { FetchOptions, FetchResult, ThreadHistoryApi } from "../types";
+import { persistsHistory, requireAdapter } from "./resolve-adapter";
 import type { AdapterResolver, ThreadHistoryCollectOptions } from "./types";
 
 /**
@@ -16,7 +17,13 @@ import type { AdapterResolver, ThreadHistoryCollectOptions } from "./types";
  *   `cache` argument on the constructor)
  *
  * Adapter resolution: the adapter name is derived from the thread ID prefix
- * (`{adapter}:{channel}:{thread}`).
+ * (`{adapter}:{channel}:{thread}`). An unknown prefix throws rather than
+ * returning an empty result.
+ *
+ * Cache fallback: reserved for adapters whose history lives in the SDK-side
+ * store (`persistThreadHistory` / legacy `persistMessageHistory`). For every
+ * other adapter, the platform response is authoritative — an empty page is a
+ * real empty page, not a cue to substitute cached data.
  */
 export class ThreadHistoryApiImpl implements ThreadHistoryApi {
   private readonly getAdapter: AdapterResolver;
@@ -30,44 +37,44 @@ export class ThreadHistoryApiImpl implements ThreadHistoryApi {
   /**
    * Fetch a single page of messages from a thread.
    *
-   * Uses `adapter.fetchMessages`. If the adapter cannot be resolved (e.g.
-   * the adapter name embedded in the thread ID is not registered), throws.
+   * Uses `adapter.fetchMessages`, falling back to the SDK-side cache only
+   * for adapters that persist history there — and never on a continuation
+   * page (an empty page mid-pagination means the thread is exhausted).
+   *
+   * @throws if the adapter embedded in the thread ID is not registered
    */
   async list(threadId: string, options?: FetchOptions): Promise<FetchResult> {
-    const adapterName = threadId.split(":")[0];
-    const adapter = adapterName ? this.getAdapter(adapterName) : undefined;
+    const adapter = requireAdapter(this.getAdapter, threadId, "history.thread");
+    const result = await adapter.fetchMessages(threadId, options);
 
-    if (adapter) {
-      const result = await adapter.fetchMessages(threadId, options);
-      if (result.messages.length > 0 || !this.cache) {
-        return result;
-      }
+    if (
+      result.messages.length === 0 &&
+      result.nextCursor === undefined &&
+      options?.cursor === undefined &&
+      this.cache &&
+      persistsHistory(adapter)
+    ) {
+      const messages = await this.readCachedWindow(threadId, options);
+      return { messages, nextCursor: undefined };
     }
 
-    if (this.cache) {
-      const cached = await this.cache.getMessages(threadId, options?.limit);
-      return { messages: cached, nextCursor: undefined };
-    }
-
-    throw new Error(
-      `history.thread.list: no adapter or cache found for thread "${threadId}"`
-    );
+    return result;
   }
 
   /**
    * Async generator that yields all messages in the thread in chronological
-   * order, handling pagination automatically.
+   * order, handling pagination automatically. With a `limit`, yields the
+   * oldest N messages on both the adapter and cache paths.
    *
    * Falls back to the `ThreadHistoryCache` (if one was provided at
-   * construction time) when the adapter cannot be resolved — useful for
-   * platforms like Telegram/WhatsApp that use the SDK-side store.
+   * construction time) for adapters that persist history in the SDK-side
+   * store — e.g. Telegram/WhatsApp.
    */
   async *collect(
     threadId: string,
     options?: ThreadHistoryCollectOptions
   ): AsyncIterable<Message> {
-    const adapterName = threadId.split(":")[0];
-    const adapter = adapterName ? this.getAdapter(adapterName) : undefined;
+    const adapter = requireAdapter(this.getAdapter, threadId, "history.thread");
     const limit = options?.limit;
     let collected = 0;
 
@@ -75,49 +82,49 @@ export class ThreadHistoryApiImpl implements ThreadHistoryApi {
       return;
     }
 
-    if (adapter) {
-      let cursor: string | undefined;
-      let yieldedAny = false;
-      do {
-        const remaining = limit !== undefined ? limit - collected : undefined;
-        if (remaining !== undefined && remaining <= 0) {
-          return;
-        }
-        const fetchLimit =
-          remaining !== undefined ? Math.max(1, Math.min(100, remaining)) : 100;
-        const result: FetchResult = await adapter.fetchMessages(threadId, {
-          direction: "forward",
-          cursor,
-          limit: fetchLimit,
-        });
-        for (const message of result.messages) {
-          yieldedAny = true;
-          yield message;
-          collected++;
-          if (limit !== undefined && collected >= limit) {
-            return;
-          }
-        }
-        cursor = result.nextCursor;
-      } while (cursor !== undefined);
-
-      if (yieldedAny) {
+    let cursor: string | undefined;
+    let yieldedAny = false;
+    while (true) {
+      const remaining = limit !== undefined ? limit - collected : undefined;
+      if (remaining !== undefined && remaining <= 0) {
         return;
       }
+      const fetchLimit =
+        remaining !== undefined ? Math.max(1, Math.min(100, remaining)) : 100;
+      const result: FetchResult = await adapter.fetchMessages(threadId, {
+        direction: "forward",
+        cursor,
+        limit: fetchLimit,
+      });
+      for (const message of result.messages) {
+        yieldedAny = true;
+        yield message;
+        collected++;
+        if (limit !== undefined && collected >= limit) {
+          return;
+        }
+      }
+      // Same guard as ThreadImpl.allMessages: an empty page ends pagination
+      // even when the adapter echoes a cursor back, so a misbehaving adapter
+      // cannot send us into an unbounded fetch loop.
+      if (!result.nextCursor || result.messages.length === 0) {
+        break;
+      }
+      cursor = result.nextCursor;
     }
 
-    // Cache fallback for adapters that don't have server-side history
-    if (this.cache) {
-      const messages = await this.cache.getMessages(threadId, limit);
-      for (const message of messages) {
-        yield message;
-      }
+    if (yieldedAny || !this.cache || !persistsHistory(adapter)) {
       return;
     }
 
-    throw new Error(
-      `history.thread.collect: no adapter or cache found for thread "${threadId}"`
-    );
+    // Cache fallback for adapters whose history lives in the SDK-side store.
+    // Slice from the front so a `limit` means "oldest N", matching the
+    // adapter path above.
+    const all = await this.cache.getMessages(threadId);
+    const messages = limit !== undefined ? all.slice(0, limit) : all;
+    for (const message of messages) {
+      yield message;
+    }
   }
 
   /**
@@ -133,6 +140,25 @@ export class ThreadHistoryApiImpl implements ThreadHistoryApi {
       );
     }
     await this.cache.append(threadId, message);
+  }
+
+  /**
+   * Read a `list()`-shaped window from the cache: `direction: "forward"`
+   * yields the oldest N, the default backward direction the newest N — the
+   * same windows the adapter path serves.
+   */
+  private async readCachedWindow(
+    threadId: string,
+    options?: FetchOptions
+  ): Promise<Message[]> {
+    if (!this.cache) {
+      return [];
+    }
+    if (options?.direction === "forward") {
+      const all = await this.cache.getMessages(threadId);
+      return options?.limit !== undefined ? all.slice(0, options.limit) : all;
+    }
+    return this.cache.getMessages(threadId, options?.limit);
   }
 }
 

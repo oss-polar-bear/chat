@@ -5,7 +5,6 @@ import { runInConversation } from "../context";
 import {
   createMockAdapter,
   createMockState,
-  createTestMessage,
   mockLogger,
 } from "../mock-adapter";
 import type { Adapter, StateAdapter } from "../types";
@@ -14,6 +13,8 @@ import type { ToolOverrides } from "./types";
 
 const REQUIRES_CHAT_INSTANCE_REGEX = /requires a `chat` instance/;
 const NO_LIST_THREADS_REGEX = /does not implement listThreads/;
+const NO_FETCH_CHANNEL_MESSAGES_REGEX =
+  /does not support fetching channel messages/;
 const OUT_OF_SCOPE_REGEX = /tools are scoped to/;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -977,28 +978,18 @@ describe("createChatTools", () => {
     expect(result.nextCursor).toBe("next");
   });
 
-  it("fetchChannelMessages falls back to fetchMessages via history.channel", async () => {
+  it("fetchChannelMessages throws when the adapter does not support it", async () => {
     (mockAdapter as { fetchChannelMessages?: unknown }).fetchChannelMessages =
       undefined;
-    const stubMessage = createTestMessage("m1", "via fallback");
-    vi.mocked(mockAdapter.fetchMessages).mockResolvedValueOnce({
-      messages: [stubMessage],
-      nextCursor: undefined,
-    });
 
     const tools = createChatTools({ chat });
-    const result = (await tools.fetchChannelMessages?.execute?.(
-      { channelId: "slack:C123", limit: 5 },
-      TOOL_OPTIONS
-    )) as { messages: Array<{ id: string; text: string }> };
-
-    expect(mockAdapter.fetchMessages).toHaveBeenCalledWith("slack:C123", {
-      limit: 5,
-      cursor: undefined,
-    });
-    expect(result.messages).toEqual([
-      expect.objectContaining({ id: "m1", text: "via fallback" }),
-    ]);
+    await expect(
+      tools.fetchChannelMessages?.execute?.(
+        { channelId: "slack:C123", limit: 5, direction: "backward" },
+        TOOL_OPTIONS
+      )
+    ).rejects.toThrow(NO_FETCH_CHANNEL_MESSAGES_REGEX);
+    expect(mockAdapter.fetchMessages).not.toHaveBeenCalled();
   });
 
   it("fetchThread returns a flattened ThreadInfo", async () => {

@@ -114,6 +114,34 @@ describe("Chat — History API wiring", () => {
     expect(chat.transcripts).toBe(api);
   });
 
+  it("merges legacy transcripts settings under history.user during migration", async () => {
+    // A config migrating one field at a time: identity moved to history.user,
+    // retention/maxPerUser still on the legacy transcripts block. Both must
+    // apply — the legacy settings must not be silently dropped.
+    const chat = new Chat({
+      userName: "testbot",
+      adapters: { slack: mockAdapter },
+      state: mockState,
+      logger: mockLogger,
+      history: { user: { identity: () => "u1" } },
+      transcripts: { maxPerUser: 50, retention: "30d" },
+    });
+
+    const msg = createTestMessage("m1", "hello");
+    msg.userKey = "u1";
+    await chat.history.user.append(
+      { adapter: mockAdapter, id: "slack:C123:1.2" } as never,
+      msg
+    );
+
+    const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+    expect(mockState.appendToList).toHaveBeenCalledWith(
+      expect.stringContaining("u1"),
+      expect.objectContaining({ userKey: "u1" }),
+      { maxLength: 50, ttlMs: thirtyDaysMs }
+    );
+  });
+
   it("chat.transcripts returns the API instance when configured", () => {
     const chat = new Chat({
       userName: "testbot",
